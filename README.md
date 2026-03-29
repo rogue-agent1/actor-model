@@ -1,8 +1,10 @@
-# actor_model
+# actor-model
 
-actor_model: Single-file Python CLI tool. Zero dependencies, Python 3.8+.
+Single-file Python CLI. Zero dependencies.
 
 ## Usage
+
 ```bash
-python3 actor_model.py --test
+python3 actor_model.py
+python3 actor_model.py test
 ```

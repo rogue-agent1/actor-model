@@ -1,89 +1,70 @@
 #!/usr/bin/env python3
-"""actor_model - Actor model implementation with message passing."""
-import sys, threading, queue
+"""Actor model — message passing concurrency simulation."""
+import sys
+from collections import deque
 
 class Actor:
     def __init__(self, name):
         self.name = name
-        self.mailbox = queue.Queue()
-        self._running = False
-        self._thread = None
-        self.processed = 0
+        self.mailbox = deque()
+        self.state = {}
         self.handlers = {}
-
     def on(self, msg_type, handler):
         self.handlers[msg_type] = handler
-        return self
-
     def send(self, msg_type, data=None):
-        self.mailbox.put((msg_type, data))
-
-    def start(self):
-        self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self):
-        while self._running:
-            try:
-                msg_type, data = self.mailbox.get(timeout=0.1)
-                if msg_type in self.handlers:
-                    self.handlers[msg_type](data)
-                self.processed += 1
-            except queue.Empty:
-                pass
-
-    def stop(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=1)
+        self.mailbox.append((msg_type, data))
+    def process_one(self):
+        if not self.mailbox: return False
+        msg_type, data = self.mailbox.popleft()
+        if msg_type in self.handlers:
+            self.handlers[msg_type](self, data)
+        return True
+    def process_all(self):
+        count = 0
+        while self.process_one():
+            count += 1
+        return count
 
 class ActorSystem:
     def __init__(self):
         self.actors = {}
-
     def create(self, name):
-        actor = Actor(name)
-        self.actors[name] = actor
-        return actor
-
-    def send(self, name, msg_type, data=None):
-        if name in self.actors:
-            self.actors[name].send(msg_type, data)
-
-    def start_all(self):
-        for a in self.actors.values():
-            a.start()
-
-    def stop_all(self):
-        for a in self.actors.values():
-            a.stop()
+        a = Actor(name)
+        self.actors[name] = a
+        return a
+    def send(self, target, msg_type, data=None):
+        if target in self.actors:
+            self.actors[target].send(msg_type, data)
+    def run(self, max_steps=1000):
+        total = 0
+        for _ in range(max_steps):
+            processed = sum(a.process_one() for a in self.actors.values())
+            total += processed
+            if processed == 0: break
+        return total
 
 def test():
-    import time
-    results = []
     sys_ = ActorSystem()
-    greeter = sys_.create("greeter")
-    greeter.on("greet", lambda name: results.append(f"Hello, {name}!"))
-    greeter.on("farewell", lambda name: results.append(f"Bye, {name}!"))
     counter = sys_.create("counter")
-    counts = [0]
-    counter.on("inc", lambda _: counts.__setitem__(0, counts[0] + 1))
-    counter.on("dec", lambda _: counts.__setitem__(0, counts[0] - 1))
-    sys_.start_all()
-    sys_.send("greeter", "greet", "World")
-    sys_.send("greeter", "farewell", "World")
-    sys_.send("counter", "inc", None)
-    sys_.send("counter", "inc", None)
-    sys_.send("counter", "dec", None)
-    time.sleep(0.3)
-    sys_.stop_all()
-    assert "Hello, World!" in results
-    assert "Bye, World!" in results
-    assert counts[0] == 1
-    assert greeter.processed == 2
-    assert counter.processed == 3
-    print("All tests passed!")
+    counter.state["count"] = 0
+    counter.on("inc", lambda self, data: self.state.__setitem__("count", self.state["count"] + (data or 1)))
+    counter.on("get", lambda self, data: None)
+    sys_.send("counter", "inc", 5)
+    sys_.send("counter", "inc", 3)
+    sys_.send("counter", "inc")
+    processed = sys_.run()
+    assert processed == 3
+    assert counter.state["count"] == 9
+    # Actor-to-actor
+    logger = sys_.create("logger")
+    logger.state["log"] = []
+    logger.on("log", lambda self, data: self.state["log"].append(data))
+    counter.on("notify", lambda self, data: sys_.send("logger", "log", f"count={self.state['count']}"))
+    sys_.send("counter", "notify")
+    sys_.run()
+    assert logger.state["log"] == ["count=9"]
+    print("  actor_model: ALL TESTS PASSED")
 
 if __name__ == "__main__":
-    test() if "--test" in sys.argv else print("actor_model: Actor system. Use --test")
+    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
+    else: print("Actor model simulation")
