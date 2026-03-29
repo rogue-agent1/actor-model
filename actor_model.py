@@ -1,60 +1,89 @@
 #!/usr/bin/env python3
-"""actor_model - Actor system with message passing and supervision."""
+"""actor_model - Actor model implementation with message passing."""
 import sys, threading, queue
 
 class Actor:
-    def __init__(self, name, handler):
+    def __init__(self, name):
         self.name = name
-        self.handler = handler
         self.mailbox = queue.Queue()
+        self._running = False
+        self._thread = None
+        self.processed = 0
+        self.handlers = {}
+
+    def on(self, msg_type, handler):
+        self.handlers[msg_type] = handler
+        return self
+
+    def send(self, msg_type, data=None):
+        self.mailbox.put((msg_type, data))
+
+    def start(self):
         self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-    def _loop(self):
+
+    def _run(self):
         while self._running:
             try:
-                msg = self.mailbox.get(timeout=0.1)
-                self.handler(self, msg)
+                msg_type, data = self.mailbox.get(timeout=0.1)
+                if msg_type in self.handlers:
+                    self.handlers[msg_type](data)
+                self.processed += 1
             except queue.Empty:
-                continue
-    def send(self, msg):
-        self.mailbox.put(msg)
+                pass
+
     def stop(self):
         self._running = False
-        self._thread.join(timeout=2)
+        if self._thread:
+            self._thread.join(timeout=1)
 
 class ActorSystem:
     def __init__(self):
         self.actors = {}
-    def spawn(self, name, handler):
-        a = Actor(name, handler)
-        self.actors[name] = a
-        return a
-    def send(self, name, msg):
+
+    def create(self, name):
+        actor = Actor(name)
+        self.actors[name] = actor
+        return actor
+
+    def send(self, name, msg_type, data=None):
         if name in self.actors:
-            self.actors[name].send(msg)
+            self.actors[name].send(msg_type, data)
+
+    def start_all(self):
+        for a in self.actors.values():
+            a.start()
+
     def stop_all(self):
-        for a in self.actors.values(): a.stop()
+        for a in self.actors.values():
+            a.stop()
 
 def test():
+    import time
     results = []
-    lock = threading.Lock()
-    def echo_handler(actor, msg):
-        with lock: results.append((actor.name, msg))
     sys_ = ActorSystem()
-    a1 = sys_.spawn("echo1", echo_handler)
-    a2 = sys_.spawn("echo2", echo_handler)
-    a1.send("hello")
-    a2.send("world")
-    a1.send("foo")
-    import time; time.sleep(0.3)
+    greeter = sys_.create("greeter")
+    greeter.on("greet", lambda name: results.append(f"Hello, {name}!"))
+    greeter.on("farewell", lambda name: results.append(f"Bye, {name}!"))
+    counter = sys_.create("counter")
+    counts = [0]
+    counter.on("inc", lambda _: counts.__setitem__(0, counts[0] + 1))
+    counter.on("dec", lambda _: counts.__setitem__(0, counts[0] - 1))
+    sys_.start_all()
+    sys_.send("greeter", "greet", "World")
+    sys_.send("greeter", "farewell", "World")
+    sys_.send("counter", "inc", None)
+    sys_.send("counter", "inc", None)
+    sys_.send("counter", "dec", None)
+    time.sleep(0.3)
     sys_.stop_all()
-    assert len(results) == 3
-    echo1_msgs = [r[1] for r in results if r[0] == "echo1"]
-    assert echo1_msgs == ["hello", "foo"]
-    echo2_msgs = [r[1] for r in results if r[0] == "echo2"]
-    assert echo2_msgs == ["world"]
-    print("actor_model: all tests passed")
+    assert "Hello, World!" in results
+    assert "Bye, World!" in results
+    assert counts[0] == 1
+    assert greeter.processed == 2
+    assert counter.processed == 3
+    print("All tests passed!")
 
 if __name__ == "__main__":
-    test() if "--test" in sys.argv else print("Usage: actor_model.py --test")
+    test() if "--test" in sys.argv else print("actor_model: Actor system. Use --test")
